@@ -1,0 +1,70 @@
+# ============================================================
+# EdgeMechanic — .gitignore
+# ============================================================
+
+# --- Models (too large for git) ---
+models/
+*.gguf
+*.bin
+*.pt
+*.pth
+*.safetensors
+
+# --- ChromaDB (local vector store) ---
+chroma_db/
+*.chroma
+
+# --- SQLite logs ---
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# --- Environment & secrets ---
+.env
+.env.*
+*.key
+secrets.yaml
+config.local.yaml
+
+# --- Raw HVAC data (PDFs may be copyrighted) ---
+data/raw/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Logs & outputs ---
+logs/
+*.log
+outputs/
+runs/
+
+# --- Unsloth / training artifacts ---
+adapter_model/
+merged_model/
+checkpoints/
+wandb/
