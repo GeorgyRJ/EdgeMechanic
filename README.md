@@ -32,7 +32,7 @@ EdgeMechanic/
 
 ## Roadmap
 - [x] Week 1 — Environment setup, llama.cpp + CUDA build, baseline inference
-- [ ] Week 2 — Pydantic schema + grammar mode
+- [x] Week 2 — Pydantic schema + grammar mode
 - [ ] Week 3 — RAG pipeline
 - [ ] Week 4 — LangChain agent
 - [ ] Week 5 — Streamlit UI + session management
