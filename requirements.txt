@@ -1,0 +1,13 @@
+# Inference
+llama-cpp-python
+
+# RAG
+pdfplumber
+chromadb
+
+# Embeddings
+FlagEmbedding
+
+# Framework
+langchain
+pydantic
