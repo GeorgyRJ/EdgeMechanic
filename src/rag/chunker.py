@@ -1,14 +1,27 @@
+"""
+HVAC Service Manual Chunking Pipeline (EdgeMechanic)
+=====================================================
+Parent/child chunking สำหรับ Trane mini-split service manual
+- ดึงตารางเข้า chunk (failure code, thermistor, torque ฯลฯ)
+- รองรับ heading หลายระดับ + เลขโรมัน Unicode (Part Ⅰ/Ⅱ)
+- Alias injection ภาษาไทยแบบ word-boundary
+- กรองหน้า garbage (embedded font เพี้ยน)
+- Batch insert ลง SQLite + ChromaDB, รันซ้ำได้ (idempotent)
+
+แก้จาก version เดิม 10 จุด — ดูหมายเหตุ [FIX-n] ในโค้ด
+"""
+
 from __future__ import annotations
- 
+
 import os
 import re
 import uuid
 import sqlite3
 from typing import List, Dict, Optional
- 
+
 import pdfplumber
 import chromadb
- 
+
 # ==========================================
 # 0. Constants & Dictionaries
 # ==========================================
@@ -16,11 +29,11 @@ PDF_PATH = "data/raw/trane_minisplit.pdf"
 DB_PATH = "trane_manual.db"
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "hvac_index"
- 
+
 CHILD_WINDOW = 5      # บรรทัดต่อ child chunk
 CHILD_OVERLAP = 1     # [FIX-6] overlap กันเนื้อหาขาดกลางเงื่อนไข
 GARBAGE_THRESHOLD = 0.35  # สัดส่วน ascii ที่อ่านได้ขั้นต่ำ
- 
+
 # Alias สำหรับช่างที่พิมพ์ศัพท์สแลงไทย
 ALIAS_DICT: Dict[str, List[str]] = {
     "outdoor pcb": ["บอร์ดคอยล์ร้อน", "เมนบอร์ดนอก", "บอร์ด odu"],
@@ -35,11 +48,11 @@ ALIAS_DICT: Dict[str, List[str]] = {
     "e5": ["error e5", "โค้ด e5"],
     "p0": ["error p0", "โค้ด p0", "ipm protection"],
 }
- 
+
 # [FIX-7] master error table จะถูก "สร้างจากตารางจริง" ในเอกสาร ไม่ hardcode แล้ว
 # ดู build_error_reference() ด้านล่าง
- 
- 
+
+
 # ==========================================
 # Helpers
 # ==========================================
@@ -49,8 +62,8 @@ def is_garbage(text: Optional[str], threshold: float = GARBAGE_THRESHOLD) -> boo
         return True
     good = sum(c.isspace() or (c.isascii() and c.isalnum()) or c in ".,:;-/°℃%()" for c in text)
     return (good / len(text)) < threshold
- 
- 
+
+
 def table_to_markdown(table: List[List[Optional[str]]]) -> str:
     """[FIX-4] serialize ตาราง pdfplumber เป็น markdown ให้ retriever อ่านได้."""
     rows = [[(c or "").strip().replace("\n", " ") for c in row] for row in table if row]
@@ -63,8 +76,8 @@ def table_to_markdown(table: List[List[Optional[str]]]) -> str:
     sep = "| " + " | ".join(["---"] * ncol) + " |"
     body = "\n".join("| " + " | ".join(r) + " |" for r in rows[1:])
     return "\n".join(filter(None, [header, sep, body]))
- 
- 
+
+
 def make_chunk(breadcrumb: str, content_lines: List[str], page_num: int,
                has_tables: bool) -> Dict:
     """[FIX-10] ศูนย์กลางการสร้าง chunk + กำหนด chunk_type."""
@@ -77,7 +90,7 @@ def make_chunk(breadcrumb: str, content_lines: List[str], page_num: int,
         chunk_type = "table"
     else:
         chunk_type = "procedure"
- 
+
     return {
         "id": str(uuid.uuid4()),
         "breadcrumb": breadcrumb,
@@ -86,8 +99,8 @@ def make_chunk(breadcrumb: str, content_lines: List[str], page_num: int,
         "page_num": page_num,
         "metadata": "",
     }
- 
- 
+
+
 # ==========================================
 # 1. Load PDF & Extract
 # ==========================================
@@ -96,7 +109,7 @@ def load_pdf(path: str) -> List[Dict]:
     if not os.path.exists(path):
         print(f"⚠️ ไม่พบไฟล์: {path}")
         return pages_data
- 
+
     with pdfplumber.open(path) as pdf:
         for i, page in enumerate(pdf.pages):
             text = page.extract_text() or ""
@@ -112,42 +125,45 @@ def load_pdf(path: str) -> List[Dict]:
                 "garbage": garbage,
             })
     return pages_data
- 
- 
+
+
 # ==========================================
 # 2. Detect Headings
 # ==========================================
 # [FIX-1] รองรับ Part + เลขโรมัน Unicode และ section 1–4 ระดับ (เช่น 6.2.10.1)
 R_PART = re.compile(r"^(PART|Part)\s+[ⅠⅡⅢⅣⅤIVX\d]+", re.IGNORECASE)
 # 1. / 1 / 2.1 / 6.2.10.1  — รับจุดท้ายเลขเดี่ยว ('1.') ด้วย
-R_SECTION = re.compile(r"^(\d+)((\.\d+){0,3})\.?\s+\S")
+R_SECTION_L2 = re.compile(r"^(\d+)\.\s+[A-Z][a-z]")  # "2. Specifications" — รับได้
+R_SECTION_L3 = re.compile(r"^(\d+)\.(\d+)(\.(\d+))*\.?\s+[A-Za-z]") # "6.2.1 Auto mode"
 R_APPENDIX = re.compile(r"^(APPENDIX|Appendix)\b", re.IGNORECASE)
- 
- 
+
+TOP_SECTION_PREFIXES = {
+    "1. Important Notice",
+    "2. Specifications",
+    "3. Product",           # รับทั้ง Production และ Product
+    "4. Refrigeration cycle diagram",
+    "5. Electric Diagram",
+    "6. Electronic Controller Introduction",
+    "1. Notes for installation and maintenance",
+    "2. Installation",
+    "3. Maintenance",
+    "4. Exploded view and parts list",
+    "5. Disassembly IDU & ODU",
+}
+
 def heading_level(line: str) -> Optional[int]:
-    """คืน level (1=Part/Appendix, 2=top section, 3=sub, 4=sub-sub) หรือ None."""
     if R_PART.match(line) or R_APPENDIX.match(line):
         return 1
-    m = R_SECTION.match(line)
-    if not m:
-        return None
- 
-    # [FIX-1b] กรอง false heading ที่หลุดมาจากตาราง/flowchart step
-    #   เช่น '25 2.0' (แถว wire-size), '2. Power supply abnormal?' (step ใน flowchart)
-    rest = line[m.end() - 1:].strip()           # ข้อความหลังเลข section
-    if line.rstrip().endswith("?"):             # heading ไม่ลงท้ายด้วยคำถาม
-        return None
-    if not rest[:1].isupper():                  # หัวข้อจริงขึ้นต้นด้วยตัวพิมพ์ใหญ่
-        return None
-    if re.fullmatch(r"[\d.\s]+", line.strip()): # ทั้งบรรทัดมีแต่ตัวเลข = แถวตาราง
-        return None
-    if len(line.split()) > 12:                   # heading สั้น ไม่ใช่ทั้งย่อหน้า
-        return None
- 
-    depth = m.group(2).count(".")
-    return min(2 + depth, 4)
- 
- 
+    # เช็กแบบ startswith แทน exact match
+    for prefix in TOP_SECTION_PREFIXES:
+        if line.strip().startswith(prefix):
+            return 2
+    if R_SECTION_L3.match(line):
+        depth = line.count(".")
+        return min(2 + depth, 4)
+    return None
+
+
 # ==========================================
 # 3. Build Parent Chunks (state machine)
 # ==========================================
@@ -157,7 +173,7 @@ def build_chunks(pages_data: List[Dict]) -> List[Dict]:
     current_lines: List[str] = []
     current_page = 1
     current_has_tables = False
- 
+
     def flush():
         """[FIX-2/FIX-3] flush ด้วย path 'ปัจจุบัน' ก่อนอัปเดตไป heading ใหม่."""
         nonlocal current_lines, current_has_tables
@@ -166,12 +182,12 @@ def build_chunks(pages_data: List[Dict]) -> List[Dict]:
             chunks.append(make_chunk(breadcrumb, current_lines, current_page, current_has_tables))
         current_lines = []
         current_has_tables = False
- 
+
     for page in pages_data:
         if page["garbage"]:
             continue
         page_num = page["page_num"]
- 
+
         for line in page["lines"]:
             lvl = heading_level(line)
             if lvl is not None:
@@ -184,19 +200,19 @@ def build_chunks(pages_data: List[Dict]) -> List[Dict]:
             else:
                 current_lines.append(line)
                 current_page = page_num
- 
+
         # [FIX-4] ผนวกตารางของหน้านี้เข้า chunk ที่กำลังสะสมอยู่
         for tbl in page["tables"]:
             md = table_to_markdown(tbl)
             if md:
                 current_lines.append("\n[TABLE]\n" + md)
                 current_has_tables = True
- 
+
     # [FIX-2] flush chunk สุดท้าย (เดิมหายตลอด — Appendix 4 thermistor!)
     flush()
     return chunks
- 
- 
+
+
 # ==========================================
 # 4. Pipeline Modifiers
 # ==========================================
@@ -212,8 +228,8 @@ def inject_aliases(chunk: Dict, alias_dict: Dict[str, List[str]]) -> Dict:
     if injected:
         chunk["metadata"] = f"[Keywords: {', '.join(sorted(injected))}]"
     return chunk
- 
- 
+
+
 def build_error_reference(chunks: List[Dict]) -> str:
     """[FIX-7] ดึง failure-code table จริงจากเอกสาร แทนการ hardcode E1/U4."""
     for c in chunks:
@@ -222,8 +238,8 @@ def build_error_reference(chunks: List[Dict]) -> str:
                 if re.search(r"\b(E0|E1|P0)\b", block):
                     return block.strip()
     return ""
- 
- 
+
+
 def process_chunk_modifiers(chunks: List[Dict]) -> List[Dict]:
     error_ref = build_error_reference(chunks)
     for chunk in chunks:
@@ -234,8 +250,8 @@ def process_chunk_modifiers(chunks: List[Dict]) -> List[Dict]:
                 f"[Flowchart Content]\n{chunk['content']}"
             )
     return chunks
- 
- 
+
+
 # ==========================================
 # 5. Child chunking with overlap
 # ==========================================
@@ -262,8 +278,8 @@ def make_children(parent: Dict) -> List[Dict]:
         if i + CHILD_WINDOW >= len(lines):
             break
     return children
- 
- 
+
+
 # ==========================================
 # 6. Save to Stores (idempotent + batched)
 # ==========================================
@@ -290,7 +306,7 @@ def save_to_stores(chunks: List[Dict]):
     )
     conn.commit()
     conn.close()
- 
+
     # ---- ChromaDB ----
     client = chromadb.PersistentClient(path=CHROMA_PATH)
     # [FIX-9] เคลียร์ collection เดิมก่อน build ใหม่
@@ -298,15 +314,24 @@ def save_to_stores(chunks: List[Dict]):
         client.delete_collection(COLLECTION_NAME)
     except Exception:
         pass
-    collection = client.get_or_create_collection(name=COLLECTION_NAME)
- 
+
+    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+    ef = SentenceTransformerEmbeddingFunction(
+        model_name="BAAI/bge-m3",
+        device="cuda"
+    )
+    collection = client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=ef  # ← แทน default ONNXMiniLM
+    )
+
     docs, metas, ids = [], [], []
     for parent in chunks:
         for child in make_children(parent):
             docs.append(child["document"])
             metas.append(child["metadata"])
             ids.append(child["id"])
- 
+
     # [FIX-8] batch add (เดิม add ทีละตัวในลูป ช้ามาก)
     BATCH = 256
     for i in range(0, len(docs), BATCH):
@@ -315,10 +340,10 @@ def save_to_stores(chunks: List[Dict]):
             metadatas=metas[i:i + BATCH],
             ids=ids[i:i + BATCH],
         )
- 
+
     print(f"✅ บันทึก {len(chunks)} parent chunks / {len(docs)} child chunks เรียบร้อย")
- 
- 
+
+
 # ==========================================
 # 7. Main
 # ==========================================
@@ -330,17 +355,17 @@ def run_pipeline(pdf_path: str = PDF_PATH) -> List[Dict]:
         return []
     good = sum(1 for p in pages if not p["garbage"])
     print(f"📄 โหลด {len(pages)} หน้า (อ่านได้ {good}, ข้าม garbage {len(pages) - good})")
- 
+
     chunks = build_chunks(pages)
     print(f"🧩 สร้าง parent chunks {len(chunks)} ชิ้น")
- 
+
     chunks = process_chunk_modifiers(chunks)
     print("💉 ฉีด aliases + master error table เรียบร้อย")
- 
+
     save_to_stores(chunks)
     return chunks
- 
- 
+
+
 if __name__ == "__main__":
     os.makedirs("data/raw", exist_ok=True)
     run_pipeline()
