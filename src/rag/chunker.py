@@ -318,7 +318,7 @@ def save_to_stores(chunks: List[Dict]):
     from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
     ef = SentenceTransformerEmbeddingFunction(
         model_name="/mnt/c/Users/ROG/bge-m3",
-        device="cuda"
+        #device="cuda"
     )
     collection = client.get_or_create_collection(
         name=COLLECTION_NAME,
