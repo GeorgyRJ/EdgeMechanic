@@ -21,6 +21,7 @@ from typing import List, Dict, Optional
 
 import pdfplumber
 import chromadb
+import unicodedata
 
 # ==========================================
 # 0. Constants & Dictionaries
@@ -63,6 +64,11 @@ def is_garbage(text: Optional[str], threshold: float = GARBAGE_THRESHOLD) -> boo
     good = sum(c.isspace() or (c.isascii() and c.isalnum()) or c in ".,:;-/°℃%()" for c in text)
     return (good / len(text)) < threshold
 
+def is_cjk_heavy(text: str, threshold: float = 0.0) -> bool:
+    """กรอง line ที่มีอักษรจีน/ญี่ปุ่น/เกาหลีใดๆ"""
+    if not text:
+        return False
+    return any('\u4e00' <= c <= '\u9fff' for c in text)
 
 def table_to_markdown(table: List[List[Optional[str]]]) -> str:
     """[FIX-4] serialize ตาราง pdfplumber เป็น markdown ให้ retriever อ่านได้."""
@@ -198,7 +204,8 @@ def build_chunks(pages_data: List[Dict]) -> List[Dict]:
                     current_path[deeper] = ""
                 current_page = page_num
             else:
-                current_lines.append(line)
+                if not is_cjk_heavy(line):
+                    current_lines.append(line)
                 current_page = page_num
 
         # [FIX-4] ผนวกตารางของหน้านี้เข้า chunk ที่กำลังสะสมอยู่
@@ -317,7 +324,7 @@ def save_to_stores(chunks: List[Dict]):
 
     from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
     ef = SentenceTransformerEmbeddingFunction(
-        model_name="/home/georgy/.cache/huggingface/hub/models--BAAI--bge-m3",
+        model_name="/mnt/c/Users/ROG/bge-m3",
         device="cuda"
     )
     collection = client.get_or_create_collection(
