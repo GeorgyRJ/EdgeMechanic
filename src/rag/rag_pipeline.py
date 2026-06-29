@@ -91,7 +91,10 @@ class HVACAssistant:
             resp = requests.post(self.llm_url, json=payload, timeout=REQUEST_TIMEOUT)
             resp.raise_for_status()
             content = resp.json().get("content", "")
+<<<<<<< HEAD
             print("DEBUG RAW:", repr(content))
+=======
+>>>>>>> 3e54ab7de1d1ec820516c29299fe1ad384f415d4
         except requests.exceptions.RequestException as e:
             return f"❌ เชื่อมต่อ LLM ไม่ได้: {e}"
         except ValueError as e:  # [FIX] json decode พังแยกจาก connection error
@@ -141,4 +144,8 @@ if __name__ == "__main__":
             print("=" * 50)
             print("🤖 AI ตอบ:")
             print(bot.ask(q))
+<<<<<<< HEAD
             print("=" * 50 + "\n")
+=======
+            print("=" * 50 + "\n")
+>>>>>>> 3e54ab7de1d1ec820516c29299fe1ad384f415d4
