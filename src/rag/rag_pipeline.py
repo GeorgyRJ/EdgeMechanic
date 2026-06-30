@@ -32,15 +32,14 @@ NOT_FOUND_MSG = "ไม่พบข้อมูลอ้างอิงในค
  
 # Prompt เป็นภาษาอังกฤษ แต่สั่งให้ "ตอบเป็นภาษาไทย" เพราะช่างพิมพ์/อ่านไทย
 SYSTEM_PROMPT = f"""You are an AI assistant for HVAC field technicians who repair air conditioners.
-Answer using ONLY the reference material (Context) provided in the user message. Do not use outside knowledge.
- 
+Use the Context below to answer the question. Reply in Thai, concise and practical.
+
 Rules:
-- Reply in THAI, in a concise, practical, technician-to-technician tone.
-- If the question asks for a procedure, answer as numbered steps.
-- Ground every statement in the Context. If the Context does not contain the answer, reply with exactly: "{NOT_FOUND_MSG}" and nothing else. Do not guess.
-- Keep exact values from the Context unchanged: error codes, temperatures, pressures, torque, resistance, part names.
-- Preserve any safety warnings from the Context (e.g. cut off power before service, refrigerant handling) when relevant.
-- Do not invent error codes, part numbers, or measurements that are not in the Context."""
+- Base your answer on the Context. You may translate, summarize, and rephrase naturally in Thai.
+- If asked for a procedure, answer as numbered steps.
+- Keep exact values unchanged: error codes, temperatures, pressures, torque, part names.
+- Preserve safety warnings from the Context when relevant.
+- If the Context has no relevant information at all, reply only: "{NOT_FOUND_MSG}\""""
  
  
 # ==========================================
@@ -86,15 +85,13 @@ class HVACAssistant:
             "n_predict": N_PREDICT,
             "temperature": TEMPERATURE,
             "stop": ["<|im_end|>", "<|im_start|>"],
+            "repeat_penalty": 1.15,
         }
         try:
             resp = requests.post(self.llm_url, json=payload, timeout=REQUEST_TIMEOUT)
             resp.raise_for_status()
             content = resp.json().get("content", "")
-<<<<<<< HEAD
             print("DEBUG RAW:", repr(content))
-=======
->>>>>>> 3e54ab7de1d1ec820516c29299fe1ad384f415d4
         except requests.exceptions.RequestException as e:
             return f"❌ เชื่อมต่อ LLM ไม่ได้: {e}"
         except ValueError as e:  # [FIX] json decode พังแยกจาก connection error
@@ -105,13 +102,17 @@ class HVACAssistant:
     def ask(self, query: str, top_k_child: int = 8, top_k_parent: int = 3) -> str:
         self._log(f"🔍 [1/3] ค้นข้อมูลในคู่มือ: '{query}'...")
         context = self.retriever.retrieve(query, top_k_child=top_k_child, top_k_parent=top_k_parent)
+        print("DEBUG CONTEXT:", context[:500])
  
         # [FIX-2] เช็ก falsiness แทนการเทียบข้อความไทยข้ามไฟล์
         if not context or context.startswith("ไม่พบ"):
             return NOT_FOUND_MSG
  
         self._log("🧠 [2/3] สร้าง prompt + ส่งให้โมเดล...")
-        answer = self._call_llm(self._build_prompt(query, context))
+        full_prompt = self._build_prompt(query, context)
+        print("=" * 30, "FULL PROMPT LENGTH:", len(full_prompt), "=" * 30)
+        print(full_prompt[-1000:])
+        answer = self._call_llm(full_prompt)
         self._log("✅ [3/3] ได้คำตอบ\n")
         return answer
  
@@ -144,8 +145,4 @@ if __name__ == "__main__":
             print("=" * 50)
             print("🤖 AI ตอบ:")
             print(bot.ask(q))
-<<<<<<< HEAD
             print("=" * 50 + "\n")
-=======
-            print("=" * 50 + "\n")
->>>>>>> 3e54ab7de1d1ec820516c29299fe1ad384f415d4

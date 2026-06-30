@@ -53,9 +53,11 @@ def is_garbage(text: Optional[str], threshold: float = GARBAGE_THRESHOLD) -> boo
     """[FIX-5] ตรวจหน้า embedded-font เพี้ยน."""
     if not text or not text.strip():
         return True
+    # cid encoding เกิน 20 ตัว = หน้า garbled จริงๆ
+    if text.count("(cid:") > 20:
+        return True
     good = sum(c.isspace() or (c.isascii() and c.isalnum()) or c in ".,:;-/°℃%()" for c in text)
     return (good / len(text)) < threshold
- 
  
 # [FIX-3] ครอบคลุม CJK + Hiragana/Katakana + Hangul ให้ตรง docstring
 _CJK_RANGES = [(0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0x3040, 0x30FF), (0xAC00, 0xD7AF)]
@@ -144,8 +146,7 @@ def part_index(line: str) -> Optional[int]:
     return ROMAN.get(m.group(1)) if m else None
  
  
-def parse_heading(line: str) -> Optional[Tuple[str, object]]:
-    """('part'|'appendix', line) | ('section', number_tuple) | None."""
+def parse_heading(line: str, valid_top: set = None, top_titles: dict = None) -> Optional[Tuple[str, object]]:
     line = line.strip()
     if R_PART.match(line):
         return ("part", line)
@@ -154,16 +155,27 @@ def parse_heading(line: str) -> Optional[Tuple[str, object]]:
     m = R_NUM.match(line)
     if not m:
         return None
-    if line.endswith("?"):           # flowchart decision step
+    if line.endswith("?"):
         return None
-    if len(line.split()) > 18:       # heading สั้น ไม่ใช่ทั้งย่อหน้า
+    if len(line.split()) > 18:
         return None
     num = tuple(int(x) for x in m.group(1).rstrip(".").split("."))
+    if len(num) == 1:
+        if valid_top is None or num[0] not in valid_top:
+            return None
+        # เลขเดี่ยว: ต้องขึ้นต้นตรงกับ title จริงจาก TOC (กัน "1. Test voltage...")
+        if top_titles is not None:
+            expected = top_titles.get(num, "")
+            # เทียบ prefix หลังตัด "N. " ออก —ยืดหยุ่นเรื่อง whitespace/punctuation เล็กน้อย
+            expected_text = expected.split(".", 1)[-1].strip().lower()[:15]
+            line_text = line.split(".", 1)[-1].strip().lower()[:15]
+            if expected_text and not line_text.startswith(expected_text[:10]):
+                return None
     return ("section", num)
+
  
  
 def parse_toc(pages: List[Dict]) -> Dict[int, Dict[Tuple[int, ...], str]]:
-    """ดึงชื่อ section จาก TOC -> {part_idx: {num_tuple: 'N. Title'}}."""
     toc: Dict[int, Dict[Tuple[int, ...], str]] = {}
     cur: Optional[int] = None
     leader = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.+?)[.\u2026]{2,}\s*\d+\s*$")
@@ -173,6 +185,10 @@ def parse_toc(pages: List[Dict]) -> Dict[int, Dict[Tuple[int, ...], str]]:
             if pi is not None:
                 cur = pi
                 toc.setdefault(cur, {})
+                continue
+            # เพิ่ม: เจอ APPENDIX ให้หยุด parse TOC
+            if R_APPENDIX.match(ln.strip()):
+                cur = None
                 continue
             m = leader.match(ln.strip())
             if m and cur is not None:
@@ -203,7 +219,25 @@ def build_chunks(pages_data: List[Dict],
     lines: List[str] = []
     page_no = 1
     has_tables = False
- 
+
+    # # สร้าง valid_top จาก TOC
+    # valid_top = set()
+    # for part_sections in toc.values():
+    #     for sec_num in part_sections:       # ← เปลี่ยนจาก num เป็น sec_num
+    #         if len(sec_num) == 1:
+    #             valid_top.add(sec_num[0])
+    
+    valid_top: Dict[int, set] = {}
+    for part_idx, part_sections in toc.items():
+        valid_top[part_idx] = set()
+        for sec_num in part_sections:
+            if len(sec_num) == 1:
+                valid_top[part_idx].add(sec_num[0])
+
+    top_titles_by_part: Dict[int, Dict[Tuple[int, ...], str]] = {}
+    for part_idx, part_sections in toc.items():
+        top_titles_by_part[part_idx] = {n: t for n, t in part_sections.items() if len(n) == 1}
+
     def flush():
         nonlocal lines, has_tables
         if lines:
@@ -212,28 +246,41 @@ def build_chunks(pages_data: List[Dict],
         has_tables = False
  
     for page in pages_data:
+
         if page["garbage"]:
             continue
         pn = page["page_num"]
+        current_part_idx = part_index(part) if part else None
+        current_valid_top = valid_top.get(current_part_idx) if current_part_idx is not None else None
+
+        current_top_titles = top_titles_by_part.get(current_part_idx)
+
+
         for line in page["lines"]:
-            h = parse_heading(line)
+            h = parse_heading(line, valid_top=current_valid_top, top_titles=current_top_titles)
             if h:
-                flush()  # [FIX-2/3] flush ด้วย state เดิมก่อนเปลี่ยน
+                flush()
                 kind, val = h
                 if kind == "part":
                     part = val
                     num = None
                     titles = dict(toc.get(part_index(val) or -1, {}))
+                    current_part_idx = part_index(val)
+                    current_valid_top = valid_top.get(current_part_idx)
+                    current_top_titles = top_titles_by_part.get(current_part_idx)
                 elif kind == "appendix":
                     part = val
                     num = None
                     titles = {}
+                    current_part_idx = None
+                    current_valid_top = None
+                    current_top_titles = None 
                 else:
-                    num = val  # type: ignore
-                    titles.setdefault(num, line)  # [FIX-1] TOC ชนะ body
+                    num = val
+                    titles.setdefault(num, line)
                 page_no = pn
             else:
-                clean = strip_cjk(line).strip()  # [FIX-3] กัน CJK เข้า body
+                clean = strip_cjk(line).strip()
                 if clean:
                     lines.append(clean)
                 page_no = pn
