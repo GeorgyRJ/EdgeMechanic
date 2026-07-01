@@ -403,9 +403,9 @@ def save_to_stores(chunks: List[Dict]):
     print(f"✅ บันทึก {len(chunks)} parent chunks / {len(docs)} child chunks เรียบร้อย")
  
  
-# ==========================================
+# =========================================
 # 7. Main
-# ==========================================
+# =========================================
 def run_pipeline(pdf_path: str = PDF_PATH) -> List[Dict]:
     print("🚀 เริ่ม Chunking Pipeline...")
     pages = load_pdf(pdf_path)
