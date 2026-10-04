@@ -94,7 +94,7 @@ class CascadeRouter:
         code = self.regex_error_code(query)                 # [FIX] capture code
         table_row = self.error_code_lookup(code) if code else None  # merge (Design Call C)
  
-        if self.regex_job_keyword(query):                   # "บันทึกงาน/จดงาน/log งาน"
+        if self.regex_job_keyword(query):                   # "/job" หรือ "/จด" prefix"
             return self._log(query, RouteID.WRITE_JOB_RECORD, layer=1,
                              matched_error_code=code,
                              job_record=self.write_job_record(query))
@@ -145,20 +145,21 @@ class CascadeRouter:
 # ==========================================
 # 4. ตัวอย่างการต่อของจริง (stub — Georgy เติมเอง)
 # ==========================================
+import re
+
+ERROR_RE = re.compile(r"([EPF]\d{1,2}|U\d)", re.IGNORECASE)
+JOB_RE = re.compile(r"^\s*/(job|จด)\b", re.IGNORECASE)
+
+def demo_error_code(q): 
+    m = ERROR_RE.search(q); return m.group(1).upper() if m else None
+def demo_job_kw(q): return bool(JOB_RE.search(q))
+def demo_lookup(code): return f"{code} = (row จากตาราง 3.1)" if code else None
+def demo_classify(q): return "knowledge"   # จริง = llama.cpp constrained JSON
+def demo_retrieve(q): return ("(context จาก retriever)", 0.35)
+def demo_rag(q, ctx, row): return f"[ตอบจาก ctx{' + '+row if row else ''}]"
+def demo_write(q): return HVACJobRecord(raw_query=q)
+
 if __name__ == "__main__":
-    import re
- 
-    ERROR_RE = re.compile(r"([EPF]\d{1,2}|U\d)", re.IGNORECASE)
-    JOB_RE = re.compile(r"(บันทึกงาน|จดงาน|log ?งาน|บันทึกการซ่อม)")
- 
-    def demo_error_code(q): 
-        m = ERROR_RE.search(q); return m.group(1).upper() if m else None
-    def demo_job_kw(q): return bool(JOB_RE.search(q))
-    def demo_lookup(code): return f"{code} = (row จากตาราง 3.1)" if code else None
-    def demo_classify(q): return "knowledge"   # จริง = llama.cpp constrained JSON
-    def demo_retrieve(q): return ("(context จาก retriever)", 0.35)
-    def demo_rag(q, ctx, row): return f"[ตอบจาก ctx{' + '+row if row else ''}]"
-    def demo_write(q): return HVACJobRecord(raw_query=q)
  
     router = CascadeRouter(
         regex_error_code=demo_error_code, regex_job_keyword=demo_job_kw,
