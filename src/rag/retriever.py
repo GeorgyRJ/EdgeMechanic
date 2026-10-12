@@ -138,10 +138,11 @@ class HVACRetriever:
  
         parent_ids = select_parents(metas, dists, top_k_parent, self.max_distance)
         if not parent_ids:
-            return "ไม่พบข้อมูลอ้างอิงที่เกี่ยวข้องในคู่มือ"
+            return "ไม่พบข้อมูลอ้างอิงที่เกี่ยวข้องในคู่มือ", 1.0
  
         parents = self._fetch_parents(parent_ids)
-        return self._format_context(parents)
+        best = min(dists) if dists else 1.0
+        return self._format_context(parents), best
  
     # ---- SQLite ----
     def _fetch_parents(self, parent_ids: List[str]) -> List[Dict]:

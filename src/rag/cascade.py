@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Callable, Optional, Tuple
+import sqlite3
  
 from pydantic import BaseModel, Field
  
@@ -50,6 +51,15 @@ class SessionLog(BaseModel):
     job_record: Optional[HVACJobRecord] = None
     content: Optional[str] = None              # คำตอบ (rag_answer path)
     ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+def error_code_lookup(code):
+    con = sqlite3.connect("trane_manual.db")
+    # COLLATE NOCASE = เทียบไม่สน case → "EB"/"eb"/"Eb" เจอหมด
+    row = con.execute(
+        "SELECT description FROM error_codes WHERE code = ? COLLATE NOCASE", (code,)
+    ).fetchone()
+    con.close()
+    return row[0] if row else None
  
  
 # ==========================================
