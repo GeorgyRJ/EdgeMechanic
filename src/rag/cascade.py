@@ -53,7 +53,8 @@ class SessionLog(BaseModel):
     ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 def error_code_lookup(code):
-    con = sqlite3.connect("trane_manual.db")
+    from retriever import DB_PATH
+    con = sqlite3.connect(DB_PATH)
     # COLLATE NOCASE = เทียบไม่สน case → "EB"/"eb"/"Eb" เจอหมด
     row = con.execute(
         "SELECT description FROM error_codes WHERE code = ? COLLATE NOCASE", (code,)
@@ -124,7 +125,8 @@ class CascadeRouter:
         # กำหนดว่า error_code_lookup ต้อง feed rag_answer เสมอ ถ้า refuse ก่อน enrichment ก็หาย
         if distance > self.tau and table_row is None:
             return self._log(query, RouteID.OUT_OF_SCOPE_REFUSE, layer=3,
-                             distance=distance, intent=intent)
+                             distance=distance, intent=intent , 
+             				 content="ไม่พบข้อมูลเรื่องนี้ในคู่มือ Trane ลองถามเรื่องที่เกี่ยวกับรุ่นที่ดูแลนะครับ")
  
         answer = self.rag_answer(query, context, table_row)  # merge row ถ้ามี
         return self._log(query, RouteID.RAG_ANSWER, layer=3,
